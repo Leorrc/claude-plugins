@@ -1,0 +1,11 @@
+{
+  "name": "dev10",
+  "owner": { "name": "Darlan H." },
+  "plugins": [
+    {
+      "name": "megabrain",
+      "source": "./plugins/megabrain",
+      "description": "Trabalhe um card do ClickUp do link ao PR provado no sistema rodando: checkpoint único, playbooks, CLI de controle das superfícies e base de conhecimento por projeto."
+    }
+  ]
+}
