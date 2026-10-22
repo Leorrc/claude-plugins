@@ -5,7 +5,7 @@
 Trabalhe um card do ClickUp do link à branch provada no sistema rodando.
 
 ```
-/plugin marketplace add <este repo>
+/plugin marketplace add pedidos10/claude-plugins
 /plugin install megabrain@dev10
 ```
 
