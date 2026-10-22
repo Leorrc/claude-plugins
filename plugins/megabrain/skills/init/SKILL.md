@@ -7,11 +7,16 @@ Formato da config: `${CLAUDE_PLUGIN_ROOT}/skills/card/references/config.md`. Lei
 
 1. **Levante sem perguntar** (só leitura; nunca leia `.env` — use `.env.example`):
    - workspace (`pnpm-workspace.yaml`, `package.json` workspaces, `turbo.json`) e cada app em
-     `apps/*`: framework (Next, Vite, Nest, Electron, React Native), script de dev, como recebe a
+     `apps/*`: framework (Next, Vite, Nest, Electron, React Native, Flutter), script de dev, como recebe a
      porta, qual variável aponta para a API;
    - banco: `docker-compose*`, ORM (TypeORM, Prisma), pasta de migrations, seed, como o app recebe
      schema ou URL. Extensões como postgis só existem uma vez por banco → isolamento `database`;
    - credencial de dev: o arquivo da seed que cria o usuário admin (regex com email e senha).
+   - app mobile: o runtime decide o que o driver `android` confere, então escreva-o sempre em
+     `android.runtime`. `pubspec.yaml` com `flutter:` → `flutter`; `react-native` nas
+     dependências do `package.json` → `react-native`. O package sai do `applicationId` em
+     `android/app/build.gradle*`. Se errar, `control.mjs <app> doctor` acusa a diferença para o
+     APK instalado e `control.mjs <app> runtime <flutter|react-native>` corrige.
 2. **Mostre a proposta** (tabela de superfícies: pasta, driver, porta, variável da API; banco e
    isolamento; o que ficou incerto) e espere o OK — é o único checkpoint.
 3. **Escreva** `.megabrain/config.json`, `.megabrain/README.md` (superfícies e o que for

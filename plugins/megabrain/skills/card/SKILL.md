@@ -193,7 +193,7 @@ pedir e `boot.mjs migrate`.
 
 `control.mjs <superfície> doctor` **primeiro, sempre**, e de novo depois de qualquer surpresa.
 `control.mjs --help` lista superfícies e comandos — os genéricos do driver (Electron por CDP, web
-por `agent-browser`, Android por adb + Hermes) e os que o projeto acrescenta em
+por `agent-browser`, Android por adb + Hermes, ou só adb num app Flutter) e os que o projeto acrescenta em
 `.megabrain/control/<superfície>.mjs`. Na web, o que a CLI não cobre passa por `ab <comando do
 agent-browser>`. Procedimento por superfície em `.megabrain/surfaces/` e por tela em
 `.megabrain/features/`.

@@ -41,13 +41,21 @@ Tudo que o `boot.mjs`, o `control.mjs` e o `blast-radius` sabem sobre um projeto
                  "args": ["-p", "{port}"], "driver": "web", "web": { "entry": "/" } },
         "entregador": { "driver": "android", "external": true,
                         "android": { "package": "...", "appApiPort": 3333, "metroPort": 8081,
-                                     "metroStart": "...", "build": "..." } }
+                                     "metroStart": "...", "build": "..." } },
+        "app": { "driver": "android", "external": true,
+                 "android": { "runtime": "flutter", "package": "...", "appApiPort": 4000, "build": "..." } }
     }
 }
 ```
 
 Drivers: `api` (só sobe), `web` (`agent-browser`), `electron` (CDP; `electron.nativeBridge`,
 `ignorePorts`, `buildFix`), `android` (adb + Hermes; `external`: não sobe pelo boot).
+`android.runtime` é `react-native` (padrão) ou `flutter`. No Flutter não há Metro nem runtime JS: o
+`doctor` não confere Metro/Hermes, o `reverse` só leva a API, o `state` não traz rota e o `eval` não
+existe. A tela é lida pelo uiautomator, onde o Flutter põe o texto do widget no `content-desc` (`text=`
+também o casa) e junta as linhas de um card num rótulo só (`text~=<parte>` casa por trecho). O `doctor`
+compara o runtime com o APK instalado (`libflutter.so` ou Hermes/React Native), e
+`control.mjs <app> runtime <flutter|react-native>` troca o valor na config.
 Superfície com `mode` (`env`, `override`, `default`, `values`) sobe no modo pedido e o registry
 guarda qual foi.
 

@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { CONFIG, listeners, script, trySh } from '../env.mjs';
+import { CONFIG, MEGABRAIN, listeners, script, trySh } from '../env.mjs';
 import {
     CtlError,
     checkApi,
@@ -20,6 +20,9 @@ import {
 
 export function androidDriver(name, spec, ext = {}) {
     const PKG = spec.android.package;
+    // Flutter has no Metro and no JS runtime: the screen is read and driven through adb alone
+    const RUNTIME = spec.android.runtime || 'react-native';
+    const FLUTTER = RUNTIME === 'flutter';
     const METRO = spec.android.metroPort || 8081;
     // the debug build points the app at localhost:<appApiPort>; adb reverse delivers it to this worktree's API
     const APP_API_PORT = spec.android.appApiPort;
@@ -52,6 +55,16 @@ export function androidDriver(name, spec, ext = {}) {
                 `${devices.length} devices attached: ${devices.map(d => d[0]).join(', ')}`,
                 'export ANDROID_SERIAL=<one of them>',
             );
+    }
+
+    /** What the installed APK was built with, from its native libraries; null when it cannot be read. */
+    function installedRuntime() {
+        const apk = (shell('pm', 'path', PKG) || '').match(/package:(\S+base\.apk)/)?.[1];
+        if (!apk) return null;
+        const libs = shell('unzip', '-l', apk) || '';
+        if (/libflutter\.so/.test(libs)) return 'flutter';
+        if (/lib(hermes|reactnative|jsc)\w*\.so/.test(libs)) return 'react-native';
+        return null;
     }
 
     // ------------------------------------------------------------- hierarchy
@@ -122,11 +135,17 @@ export function androidDriver(name, spec, ext = {}) {
         if (target.startsWith('id='))
             match = n => n.id === target.slice(3) || n.id.endsWith(`:id/${target.slice(3)}`);
         else if (target.startsWith('desc=')) match = n => norm(n.desc) === norm(target.slice(5));
-        else if (target.startsWith('text=')) match = n => norm(n.text) === norm(target.slice(5));
+        // Flutter merges a card's lines into one label, so its text is matched by a part of it
+        else if (target.startsWith('text~='))
+            match = n => [n.text, n.desc].some(label => norm(label).includes(norm(target.slice(6))));
+        // Flutter exposes a widget's text as its content-desc, never as text
+        else if (target.startsWith('text='))
+            match = n =>
+                norm(n.text) === norm(target.slice(5)) || (FLUTTER && norm(n.desc) === norm(target.slice(5)));
         else
             throw new CtlError(
                 `bad target ${target}`,
-                'text=<visible text>, desc=<content-desc>, id=<testID> or x,y',
+                'text=<visible text>, text~=<part of it>, desc=<content-desc>, id=<testID> or x,y',
             );
         // RN often puts the text on a child of the touchable; tapping the text's centre still hits the touchable
         const found = nodes.filter(n => match(n) && n.w > 0 && n.h > 0);
@@ -276,13 +295,26 @@ export function androidDriver(name, spec, ext = {}) {
             add('app', 'fail', `${PKG} is not installed`, 'build the debug app (fix of the "debug" check)');
             return finishDoctor(checks);
         }
+        const installed = installedRuntime();
+        if (installed && installed !== RUNTIME)
+            add(
+                'runtime',
+                'fail',
+                `the installed app is ${installed}, but the surface is configured as ${RUNTIME}`,
+                `control.mjs ${name} runtime ${installed}`,
+            );
+        else add('runtime', 'ok', installed ? RUNTIME : `${RUNTIME} (could not read the installed APK)`);
+
         const debuggable = !/not debuggable/.test(shell('run-as', PKG, 'true') ?? 'not debuggable');
-        if (debuggable) add('debug', 'ok', 'debug build: loads the bundle from Metro');
+        if (debuggable)
+            add('debug', 'ok', FLUTTER ? 'debug build' : 'debug build: loads the bundle from Metro');
         else
             add(
                 'debug',
                 'fail',
-                'release build installed: it ignores Metro (your code is not running) and talks to its compiled API',
+                FLUTTER
+                    ? 'release build installed: your code is not running and it talks to its compiled API'
+                    : 'release build installed: it ignores Metro (your code is not running) and talks to its compiled API',
                 buildDebug,
             );
 
@@ -304,13 +336,22 @@ export function androidDriver(name, spec, ext = {}) {
             );
         else add('api-reverse', 'ok', `app :${APP_API_PORT} → host :${API_PORT}`);
 
-        if (!listeners(METRO).length) add('metro', 'fail', `nothing listens on :${METRO}`, metroStart);
-        else if (!new RegExp(`tcp:${METRO} tcp:${METRO}`).test(reverse))
-            add('metro', 'fail', 'Metro is up but the device cannot reach it', `control.mjs ${name} reverse`);
-        else add('metro', 'ok', `:${METRO}, reversed`);
+        if (!FLUTTER) {
+            if (!listeners(METRO).length) add('metro', 'fail', `nothing listens on :${METRO}`, metroStart);
+            else if (!new RegExp(`tcp:${METRO} tcp:${METRO}`).test(reverse))
+                add(
+                    'metro',
+                    'fail',
+                    'Metro is up but the device cannot reach it',
+                    `control.mjs ${name} reverse`,
+                );
+            else add('metro', 'ok', `:${METRO}, reversed`);
+        }
 
         const top = shell('dumpsys', 'activity', 'activities') || '';
-        const resumed = top.match(/topResumedActivity=\S+ \S+ (\S+)/)?.[1] || 'unknown';
+        // Android 10 and older name the field mResumedActivity
+        const resumed =
+            top.match(/(?:topResumedActivity|mResumedActivity)[=:] ?\S+ \S+ (\S+)/)?.[1] || 'unknown';
         if (!resumed.startsWith(PKG))
             add(
                 'foreground',
@@ -330,7 +371,7 @@ export function androidDriver(name, spec, ext = {}) {
                 );
         }
 
-        if (debuggable) {
+        if (debuggable && !FLUTTER) {
             try {
                 const r = await withHermes(cdp => cdp.evaluate(routeSource));
                 if (r.error)
@@ -361,16 +402,35 @@ export function androidDriver(name, spec, ext = {}) {
     const commands = {
         doctor,
 
+        // the runtime is the surface's config, so switching it rewrites .megabrain/config.json
+        runtime: value => {
+            requireDevice();
+            if (!value)
+                return print({
+                    ok: true,
+                    command: 'runtime',
+                    configured: RUNTIME,
+                    installed: installedRuntime(),
+                });
+            if (!['flutter', 'react-native'].includes(value))
+                throw new CtlError(`unknown runtime ${value}`, 'flutter or react-native');
+            const file = path.join(MEGABRAIN, 'config.json');
+            const config = JSON.parse(fs.readFileSync(file, 'utf8'));
+            config.surfaces[name].android.runtime = value;
+            if (!dryRun) fs.writeFileSync(file, `${JSON.stringify(config, null, 4)}\n`);
+            print({ ok: true, command: 'runtime', from: RUNTIME, to: value, file, dryRun });
+        },
+
         reverse: () => {
             requireDevice();
             if (dryRun) return print({ ok: true, command: 'reverse', dryRun: true });
             adb('reverse', `tcp:${APP_API_PORT}`, `tcp:${API_PORT}`);
-            adb('reverse', `tcp:${METRO}`, `tcp:${METRO}`);
+            if (!FLUTTER) adb('reverse', `tcp:${METRO}`, `tcp:${METRO}`);
             print({
                 ok: true,
                 command: 'reverse',
                 api: `${APP_API_PORT} → ${API_PORT}`,
-                metro: `${METRO} → ${METRO}`,
+                ...(FLUTTER ? {} : { metro: `${METRO} → ${METRO}` }),
             });
         },
 
@@ -378,10 +438,12 @@ export function androidDriver(name, spec, ext = {}) {
             requireDevice();
             const nodes = dumpNodes();
             let route = null;
-            try {
-                route = await withHermes(cdp => cdp.evaluate(routeSource));
-            } catch (error) {
-                route = { error: error.message };
+            if (!FLUTTER) {
+                try {
+                    route = await withHermes(cdp => cdp.evaluate(routeSource));
+                } catch (error) {
+                    route = { error: error.message };
+                }
             }
             print({
                 ok: true,
@@ -512,6 +574,11 @@ export function androidDriver(name, spec, ext = {}) {
         },
 
         eval: source => {
+            if (FLUTTER)
+                throw new CtlError(
+                    'a Flutter app has no JS runtime to evaluate',
+                    'read the screen with state or dump',
+                );
             if (!source)
                 throw new CtlError('eval needs JavaScript', `control.mjs ${name} eval "return __DEV__"`);
             return withHermes(async cdp =>
@@ -549,8 +616,8 @@ export function androidDriver(name, spec, ext = {}) {
               })
             : {},
     );
-    const help = `  doctor | reverse | launch | state | dump [--all] | tap <target> | type <target> <text>
-  wait-for <target> [ms] | hide-keyboard | back | open-link <url> | eval <js> | screenshot [file]
-  target: text=<visible text>, desc=<content-desc>, id=<testID> or x,y${ext.help ? `\n${ext.help}` : ''}`;
+    const help = `  doctor | runtime [flutter|react-native] | reverse | launch | state | dump [--all] | tap <target> | type <target> <text>
+  wait-for <target> [ms] | hide-keyboard | back | open-link <url> | ${FLUTTER ? '' : 'eval <js> | '}screenshot [file]
+  target: text=<visible text>, text~=<part of it>, desc=<content-desc>, id=<testID> or x,y${ext.help ? `\n${ext.help}` : ''}`;
     return { commands, help };
 }
